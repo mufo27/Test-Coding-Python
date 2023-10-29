@@ -38,16 +38,25 @@ class StudentSubjectsScoreAPIView(APIView):
 
         """
 
-        subjects_context = [{"id": 1, "title": "Math"}, {"id": 2, "title": "Physics"}, {"id": 3, "title": "Chemistry"},
-                            {"id": 4, "title": "Algorithm"}, {"id": 5, "title": "Coding"}]
+        subjects_context = [
+                {"id": 1, "title": "Math"}, 
+                {"id": 2, "title": "Physics"}, 
+                {"id": 3, "title": "Chemistry"},
+                {"id": 4, "title": "Algorithm"}, 
+                {"id": 5, "title": "Coding"}
+            ]
 
         credits_context = [{"id": 6, "credit": 1, "subject_id_list_that_using_this_credit": [3]},
                            {"id": 7, "credit": 2, "subject_id_list_that_using_this_credit": [2, 4]},
                            {"id": 9, "credit": 3, "subject_id_list_that_using_this_credit": [1, 5]}]
 
-        credits_mapping = [{"subject_id": 1, "credit_id": 9}, {"subject_id": 2, "credit_id": 7},
-                           {"subject_id": 3, "credit_id": 6}, {"subject_id": 4, "credit_id": 7},
-                           {"subject_id": 5, "credit_id": 9}]
+        credits_mapping = [
+                {"subject_id": 1, "credit_id": 9}, 
+                {"subject_id": 2, "credit_id": 7},
+                {"subject_id": 3, "credit_id": 6}, 
+                {"subject_id": 4, "credit_id": 7},
+                {"subject_id": 5, "credit_id": 9}
+            ]
 
         student_first_name = request.data.get("first_name", None)
         student_last_name = request.data.get("last_name", None)
@@ -60,25 +69,43 @@ class StudentSubjectsScoreAPIView(APIView):
         # # Create Objects Example
         # DataModel.objects.create(filed_1=value_1, filed_2=value_2, filed_2=value_3)
 
+        if not (student_first_name and student_last_name and subjects_title and score):
+            return Response("Data Payload not complete", status=status.HTTP_400_BAD_REQUEST)
+        
+        if not (isinstance(score, (int, float)) and 0 <= score <= 100):
+            return Response("Invalid score", status=status.HTTP_400_BAD_REQUEST)
 
-        if student_first_name is None or student_last_name is None or subjects_title is None or score is None:
-            return Response("Bad request: Payload data must contain 'first_name', 'last_name', 'subject_title', and 'score'.", status=status.HTTP_400_BAD_REQUEST)
+        try:
+            subject = Subjects.objects.get(title=subjects_title)
+            student = Personnel.objects.get(first_name=student_first_name, last_name=student_last_name, personnel_type=2)
+        except Subjects.DoesNotExist:
+            return Response("Subject's Name not found in Database", status=status.HTTP_400_BAD_REQUEST)
+        except Personnel.DoesNotExist:
+            return Response("Student's Name not found in Database", status=status.HTTP_400_BAD_REQUEST)
 
-        if not isinstance(student_first_name, str) or not isinstance(student_last_name, str) or not isinstance(subjects_title, str) or not (isinstance(score, int) or isinstance(score, float)):
-            return Response("Bad request: Data types do not match the rules.", status=status.HTTP_400_BAD_REQUEST)
+        # Check if the student already has a score for this subject
+        try:
+            score_obj = StudentSubjectsScore.objects.get(student=student, subjects=subject)
+        except StudentSubjectsScore.DoesNotExist:
+            score_obj = None
 
-        if not (0 <= score <= 100):
-            return Response("Bad request: 'score' must be a number between 0 and 100.", status=status.HTTP_400_BAD_REQUEST)
+        if score_obj:
+            # If the score already exists, update it
+            score_obj.score = score
+            score_obj.save()
+        else:
+            # If the score does not exist, create a new entry
+            StudentSubjectsScore.objects.create(student=student, subjects=subject, score=score, credit=credits_mapping[subject.id])
 
-        student_exists = True
-        subject_exists = True
+        # Return student's details, subject's title, credit, and score context with created status
+        example_context_data = {
+            "student_details": f"{student_first_name} {student_last_name}",
+            "subjects_title": subjects_title,
+            "credit": credits_mapping[subject.id],
+            "score": score
+        }
 
-        if not student_exists or not subject_exists:
-            return Response("Bad request: Student's Name or Subject's Title not found in the database.", status=status.HTTP_400_BAD_REQUEST)
-
-
-        return Response(status=status.HTTP_201_CREATED)
-
+        return Response(example_context_data, status=status.HTTP_201_CREATED)
 
 class StudentSubjectsScoreDetailsAPIView(APIView):
 
@@ -131,8 +158,55 @@ class StudentSubjectsScoreDetailsAPIView(APIView):
             "grade_point_average": "grade point average",
         }
 
-        return Response(example_context_data, status=status.HTTP_200_OK)
+        try:
+            student = Personnel.objects.get(id=student_id, personnel_type=2)  
+            student_full_name = f"{student.first_name} {student.last_name}"
+            student_school = student.school_class.school.title
+            example_context_data["student"]["full_name"] = student_full_name
+            example_context_data["student"]["school"] = student_school
 
+            subject_scores = StudentSubjectsScore.objects.filter(student=student)
+
+            total_credit = 0
+            total_score = 0
+
+            for score in subject_scores:
+                subject_detail = {
+                    "subject": score.subjects.title,
+                    "credit": score.credit,
+                    "score": score.score,
+                    "grade": get_grade(score.score)
+                }
+                example_context_data["subject_detail"].append(subject_detail)
+
+                total_credit += score.credit
+                total_score += score.score
+
+            if total_credit > 0:
+                example_context_data["grade_point_average"] = total_score / total_credit
+
+            return Response(example_context_data, status=status.HTTP_200_OK)
+
+        except Personnel.DoesNotExist:
+            return Response("Student not found", status=status.HTTP_404_NOT_FOUND)
+
+def get_grade(score):
+    if 80 <= score <= 100:
+        return "A"
+    elif 75 <= score < 80:
+        return "B+"
+    elif 70 <= score < 75:
+        return "B"
+    elif 65 <= score < 70:
+        return "C+"
+    elif 60 <= score < 65:
+        return "C"
+    elif 55 <= score < 60:
+        return "D+"
+    elif 50 <= score < 55:
+        return "D"
+    else:
+        return "F"
 
 class PersonnelDetailsAPIView(APIView):
 
@@ -220,6 +294,14 @@ class PersonnelDetailsAPIView(APIView):
         school_title = kwargs.get("school_title", None)
 
         your_result = []
+
+        # Filter personnel details by the given school title
+        filtered_details = [detail for detail in data_pattern if f"school: {school_title}" in detail]
+
+        # Sort personnel details by role, class order, and name
+        filtered_details.sort(key=lambda detail: (detail.split(", role: ")[1], int(detail.split(", class: ")[1]), detail.split(", name: ")[1].title()))
+
+        your_result.extend(filtered_details)
 
         return Response(your_result, status=status.HTTP_400_BAD_REQUEST)
 
@@ -804,7 +886,26 @@ class SchoolHierarchyAPIView(APIView):
             }
         ]
 
-        your_result = []
+        # Define a function to sort personnel data by role, class, and name.
+        def sort_personnel(personnel):
+            roles = ["Head of the room", "Student", "Teacher"]  # Define the sorting order
+            personnel.sort(key=lambda x: (roles.index(list(x.keys())[0]), list(x.values())[0]))
+
+        # Iterate through the data_pattern and sort personnel data within each class.
+        for school_data in data_pattern:
+            for class_data in school_data.values():
+                for teacher_data in class_data.get("Teacher: ", []):
+                    if "Head of the room" in teacher_data:
+                        sort_personnel(teacher_data["Head of the room"])
+                    if "Student" in teacher_data:
+                        sort_personnel(teacher_data["Student"])
+
+        # Sort schools by name and classes by number.
+        sorted_data = sorted(data_pattern, key=lambda x: x["school"])
+        for school_data in sorted_data:
+            school_data["class 1"] = sorted(school_data["class 1"], key=lambda x: int(x.split()[-1]))
+
+        your_result = sorted_data
 
         return Response(your_result, status=status.HTTP_200_OK)
 
@@ -991,6 +1092,30 @@ class SchoolStructureAPIView(APIView):
             }
         ]
 
-        your_result = []
+        def organize_structure(data_pattern):
+            result = []
+
+            for level1_item in data_pattern:
+                level1_data = {
+                    "title": level1_item["title"],
+                    "sub": []
+                }
+
+                for level2_item in level1_item["sub"]:
+                    level2_data = {
+                        "title": level2_item["title"],
+                        "sub": []
+                    }
+
+                    for level3_item in level2_item["sub"]:
+                        level2_data["sub"].append({"title": level3_item["title"]})
+
+                    level1_data["sub"].append(level2_data)
+
+                result.append(level1_data)
+
+            return result
+
+        your_result = organize_structure(data_pattern)
 
         return Response(your_result, status=status.HTTP_200_OK)
